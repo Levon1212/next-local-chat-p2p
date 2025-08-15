@@ -13,7 +13,8 @@ export function getSocket(): Socket {
     // Optional diagnostics for debugging connectivity on the frontend
     socket.on('connect', () => {
       // eslint-disable-next-line no-console
-      console.log('[socket] connected', socket.id);
+      const sid = socket?.id;
+      console.log('[socket] connected', sid);
     });
     socket.on('disconnect', (reason) => {
       // eslint-disable-next-line no-console

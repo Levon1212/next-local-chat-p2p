@@ -17,7 +17,8 @@
     "react-dom": "latest",
     "simple-peer": "latest",
     "socket.io-client": "latest",
-    "zustand": "latest"
+    "zustand": "latest",
+    "sass": "latest"
   },
   "devDependencies": {
     "@types/node": "latest",
@@ -25,7 +26,6 @@
     "@types/simple-peer": "^9.11.8",
     "eslint": "latest",
     "eslint-config-next": "latest",
-    "typescript": "latest",
-    "sass": "latest"
+    "typescript": "latest"
   }
 }
