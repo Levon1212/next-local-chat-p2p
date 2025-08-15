@@ -49,6 +49,32 @@ type WireEnvelope =
   | { kind: 'chat'; msg: WireMessage }
   | FileChunk;
 
+function dataURLtoBlob(dataUrl: string): Blob {
+  // data:[<mediatype>][;base64],<data>
+  const match = dataUrl.match(/^data:([^;,]+)?(;base64)?,(.*)$/);
+  if (!match) throw new Error('Invalid data URL');
+  const mime = match[1] || 'application/octet-stream';
+  const isBase64 = !!match[2];
+  const data = decodeURIComponent(match[3]);
+  let bytes: Uint8Array;
+  if (isBase64) {
+    // atob expects non-URL-encoded string
+    const bstr = typeof atob !== 'undefined' ? atob(match[3]) : Buffer.from(match[3], 'base64').toString('binary');
+    bytes = new Uint8Array(bstr.length);
+    for (let i = 0; i < bstr.length; i++) bytes[i] = bstr.charCodeAt(i);
+  } else {
+    // plain data; interpret as UTF-8
+    bytes = new TextEncoder().encode(data);
+  }
+  const ab = bytes.buffer.slice(0) as ArrayBuffer;
+  return new Blob([ab], { type: mime });
+}
+
+function fileNameFromMime(mime: string): string {
+  const ext = mime.split('/')[1] || 'bin';
+  return `received-file-${Date.now().toString(36)}.${ext}`;
+}
+
 function hashRoomKey(pw: string) {
   let h = 0;
   for (let i=0;i<pw.length;i++) { h = ((h<<5)-h) + pw.charCodeAt(i); h |= 0; }
@@ -170,8 +196,33 @@ export default function Chat() {
           p?.signal(data);
           return;
         }
-        // Treat plain string payloads as chat messages broadcast over Socket.IO
+        // Socket.IO chat or file broadcast
         if (typeof data === 'string') {
+          // File via data URL
+          if (data.startsWith('data:')) {
+            // eslint-disable-next-line no-console
+            console.log('[signal] file (dataURL) from peer', from);
+            try {
+              const blob = dataURLtoBlob(data);
+              const fid = uid();
+              const name = fileNameFromMime(blob.type || 'application/octet-stream');
+              // Persist file and message
+              db.files.put({ id: fid, blob }).then(() => {
+                db.messages.put({
+                  id: uid(),
+                  sender: 'other',
+                  text: '',
+                  ts: Date.now(),
+                  attachments: [{ id: fid, name, type: blob.type || 'application/octet-stream', size: blob.size }]
+                });
+              });
+            } catch (err) {
+              // eslint-disable-next-line no-console
+              console.error('[signal] failed to process incoming dataURL file', err);
+            }
+            return;
+          }
+          // Plain text chat
           // eslint-disable-next-line no-console
           console.log('[signal] chat from peer', from, data);
           // Avoid duplicates when P2P is active: only use Socket.IO chat if no peers are connected
@@ -317,6 +368,26 @@ export default function Chat() {
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error('[signal] emit error', e);
+    }
+
+    // If no WebRTC peers yet, also send files via Socket.IO as base64 data URLs
+    if (files.length && peersRef.current.size === 0) {
+      for (const f of files) {
+        try {
+          const dataUrl = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ''));
+            reader.onerror = (err) => reject(err);
+            reader.readAsDataURL(f);
+          });
+          socket.emit('signal', { room: roomKey, data: dataUrl });
+          // eslint-disable-next-line no-console
+          console.log('[signal] sent file (dataURL) to room', { roomKey, name: f.name, size: f.size });
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.error('[signal] failed to encode/send file via Socket.IO', err);
+        }
+      }
     }
 
     // Keep existing P2P broadcast for WebRTC-connected peers
