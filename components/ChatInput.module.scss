@@ -1,0 +1,4 @@
+.form { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.textInput { border: 1px solid #333; background: #0f0f0f; color: #fff; border-radius: 12px; padding: 10px 12px; flex: 1; min-width: 220px; }
+.sendBtn { border: 1px solid #333; background: #2563eb; color: #fff; padding: 10px 14px; border-radius: 12px; }
+.previewRow { display: flex; gap: 12px; flex-wrap: wrap; width: 100%; }

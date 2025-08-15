@@ -1,0 +1,16 @@
+.bubble {
+  max-width: 75%;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid #333;
+  animation: pop 160ms ease-out;
+}
+.me { align-self: flex-end; }
+.other { align-self: flex-start; }
+.attachmentsRow { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
+.timestamp { opacity: .75; font-size: 12px; margin-top: 4px; }
+
+@keyframes pop {
+  from { transform: translateY(4px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}

@@ -6,6 +6,8 @@ import { create } from 'zustand';
 import { getSocket } from '@/lib/signal';
 import Peer from 'simple-peer';
 import { HARDCODED_PASSWORD } from './PasswordGate';
+import ChatFeed from './ChatFeed';
+import ChatInput from './ChatInput';
 
 type Prefs = {
   meIsBlack: boolean;
@@ -55,14 +57,13 @@ function hashRoomKey(pw: string) {
 
 export default function Chat() {
   const { meIsBlack, setMeIsBlack } = usePrefs();
-  const [sender, setSender] = useState<'me'|'other'>('me');
-  const [text, setText] = useState('');
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [connectedPeers, setConnectedPeers] = useState<string[]>([]);
+  const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
 
   const peersRef = useRef(new Map<string, Peer.Instance>());
   const incomingFileBuffers = useRef(new Map<string, { buffers: ArrayBuffer[]; meta: { id: string; name: string; type: string; size: number; } }>());
+  const cancelKeysRef = useRef(new Set<string>());
 
   const roomKey = hashRoomKey(HARDCODED_PASSWORD);
 
@@ -193,6 +194,10 @@ export default function Chat() {
     }
   }
 
+  function makeProgressKey(a: { name: string; size: number; type: string }) {
+    return `${a.name}:${a.size}:${a.type}`;
+  }
+
   async function addLocalMessage(partial: Partial<Message>, files: File[] = []) {
     const id = uid();
     const atts: Attachment[] = [];
@@ -222,7 +227,10 @@ export default function Chat() {
       const file = files.find(f => f.name === a.name && f.size === a.size && f.type === a.type);
       if (!file) continue;
       const totalSeq = Math.ceil(file.size / CHUNK) || 1;
+      const progressKey = makeProgressKey(file);
+      cancelKeysRef.current.delete(progressKey);
       for (let seq=0; seq<totalSeq; seq++) {
+        if (cancelKeysRef.current.has(progressKey)) break;
         const start = seq * CHUNK;
         const end = Math.min(start + CHUNK, file.size);
         const slice = await file.slice(start, end).arrayBuffer();
@@ -248,16 +256,22 @@ export default function Chat() {
           const ch = (p as any)._channel;
           if (ch && ch.readyState === 'open') p.send(packet);
         }
+        // update progress
+        setUploadProgress(prev => ({ ...prev, [progressKey]: Math.round(((seq + 1) / totalSeq) * 100) }));
+        // Yield back to UI to keep it responsive
+        await new Promise(requestAnimationFrame);
       }
+      // cleanup progress after completion or cancel
+      setUploadProgress(prev => {
+        const { [progressKey]: _, ...rest } = prev;
+        return rest;
+      });
+      cancelKeysRef.current.delete(progressKey);
     }
   }
 
-  async function handleSend(e?: React.FormEvent) {
-    if (e) e.preventDefault();
-    const files = Array.from(fileInputRef.current?.files || []);
+  async function handleSendFromInput(text: string, files: File[]) {
     const localMsg = await addLocalMessage({ text }, files);
-    setText('');
-    if (fileInputRef.current) fileInputRef.current.value = '';
 
     const wire: WireMessage = {
       id: localMsg.id,
@@ -301,15 +315,6 @@ export default function Chat() {
             <span>My bubbles: black / Other: white</span>
           </label>
         </div>
-        <div className="badge">
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            Sender:
-            <select className="input" value={sender} onChange={(e) => setSender(e.target.value as any)}>
-              <option value="me">Me</option>
-              <option value="other">Other</option>
-            </select>
-          </label>
-        </div>
         <span className="badge">Peers: {connectedPeers.length}</span>
         <button className="btn" onClick={exportChat}>Export</button>
         <button className="btn" onClick={clearAll}>Clear</button>
@@ -317,84 +322,12 @@ export default function Chat() {
 
       <hr />
 
-      <div className="bubbles" style={{ margin: '12px 0', minHeight: 240 }}>
-        {messages.map((m) => (
-          <Bubble key={m.id} m={m} meIsBlack={meIsBlack} />
-        ))}
-      </div>
+      <ChatFeed messages={messages} meIsBlack={meIsBlack} />
 
-      <form onSubmit={handleSend} className="row">
-        <input
-          className="input flex-1"
-          placeholder="Type a message..."
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-        />
-        <input type="file" multiple ref={fileInputRef} />
-        <button className="btn primary" type="submit">Send</button>
-      </form>
+      <ChatInput onSend={handleSendFromInput} uploadProgress={uploadProgress} />
 
       <p><small className="mono">P2P over WebRTC. Signaling via Socket.IO. Data stored only in your browser.</small></p>
     </div>
   );
-}
 
-function Bubble({ m, meIsBlack }: { m: Message; meIsBlack: boolean; }) {
-  const [urls, setUrls] = useState<{ id: string; url: string; name: string; type: string }[]>([]);
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const out: { id: string; url: string; name: string; type: string }[] = [];
-      for (const a of m.attachments ?? []) {
-        const rec = await db.files.get(a.id);
-        if (rec) {
-          const u = URL.createObjectURL(rec.blob);
-          out.push({ id: a.id, url: u, name: a.name, type: a.type });
-        }
-      }
-      if (!cancelled) setUrls(out);
-      return () => { for (const u of out) URL.revokeObjectURL(u.url); };
-    })();
-    return () => { cancelled = true; };
-  }, [m.id]);
-
-  const isMe = m.sender === 'me';
-  const meBg = meIsBlack ? '#000' : '#fff';
-  const meFg = meIsBlack ? '#fff' : '#000';
-  const otherBg = meIsBlack ? '#fff' : '#000';
-  const otherFg = meIsBlack ? '#000' : '#fff';
-  const bg = isMe ? meBg : otherBg;
-  const fg = isMe ? meFg : otherFg;
-
-  return (
-    <div className={`bubble ${isMe ? 'me' : 'other'}`} style={{ background: bg, color: fg }}>
-      <div style={{ whiteSpace: 'pre-wrap' }}>{m.text}</div>
-      {!!urls.length && (
-        <div className="row" style={{ flexWrap: 'wrap', marginTop: 8 }}>
-          {urls.map(u => (
-            <AttachmentPreview key={u.id} u={u} />
-          ))}
-        </div>
-      )}
-      <div><small className="mono">{new Date(m.ts).toLocaleString()}</small></div>
-    </div>
-  );
-}
-
-function AttachmentPreview({ u }: { u: { id: string; url: string; name: string; type: string } }) {
-  const isImage = u.type.startsWith('image/');
-  return (
-    <div className="col" style={{ alignItems: 'center' }}>
-      {isImage ? (
-        <img className="thumb" src={u.url} alt={u.name} />
-      ) : (
-        <div className="thumb" style={{ display: 'grid', placeItems: 'center' }}>
-          <span style={{ textAlign: 'center' }}>{u.type || 'file'}</span>
-        </div>
-      )}
-      <a className="btn" href={u.url} download={u.name} style={{ textDecoration: 'none' }}>
-        Download {u.name}
-      </a>
-    </div>
-  );
 }
