@@ -138,7 +138,12 @@ export default function Chat() {
       return peer;
     }
 
-    const joinRoom = () => socket.emit('join', roomKey);
+    const joinRoom = () => {
+      socket.emit('join', roomKey);
+      // diagnostics
+      // eslint-disable-next-line no-console
+      console.log('[socket] join room', { roomKey, sid: socket.id });
+    };
     if (socket.connected) joinRoom(); else socket.on('connect', joinRoom);
 
     socket.on('peers', (others: string[]) => {
@@ -157,8 +162,31 @@ export default function Chat() {
     });
 
     socket.on('signal', ({ from, data }) => {
-      const p = peersRef.current.get(from) || connectToPeer(from, false);
-      p?.signal(data);
+      try {
+        const isObj = typeof data === 'object' && data !== null;
+        const isWebRTC = isObj && (('type' in data) || ('sdp' in data) || ('candidate' in (data as any)));
+        if (isWebRTC) {
+          const p = peersRef.current.get(from) || connectToPeer(from, false);
+          p?.signal(data);
+          return;
+        }
+        // Treat plain string payloads as chat messages broadcast over Socket.IO
+        if (typeof data === 'string') {
+          // eslint-disable-next-line no-console
+          console.log('[signal] chat from peer', from, data);
+          // Avoid duplicates when P2P is active: only use Socket.IO chat if no peers are connected
+          if (peersRef.current.size === 0) {
+            addLocalMessage({ text: data, sender: 'other' });
+          }
+          return;
+        }
+        // Unknown payload; ignore safely
+        // eslint-disable-next-line no-console
+        console.warn('[signal] unknown payload shape; ignoring');
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error('[signal] handler error', e);
+      }
     });
 
     return () => {
@@ -271,6 +299,7 @@ export default function Chat() {
   }
 
   async function handleSendFromInput(text: string, files: File[]) {
+    const socket = getSocket();
     const localMsg = await addLocalMessage({ text }, files);
 
     const wire: WireMessage = {
@@ -280,6 +309,17 @@ export default function Chat() {
       ts: localMsg.ts,
       attachments: localMsg.attachments
     };
+    // Emit over Socket.IO for room-wide delivery (fallback or if P2P isn’t established)
+    try {
+      socket.emit('signal', { room: roomKey, data: localMsg.text });
+      // eslint-disable-next-line no-console
+      console.log('[signal] sent chat to room', { roomKey, text: localMsg.text });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[signal] emit error', e);
+    }
+
+    // Keep existing P2P broadcast for WebRTC-connected peers
     broadcastEnvelope({ kind: 'chat', msg: wire });
 
     if (files.length && localMsg.attachments?.length) {
