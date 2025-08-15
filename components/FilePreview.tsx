@@ -18,11 +18,13 @@ export default function FilePreview({
   return (
     <div className={styles.wrapper}>
       <div className={styles.thumbBox}>
-        {isImage ? (
-          <img className={styles.thumb} src={u.url} alt={u.name} />)
-          : (
-          <div className={`${styles.thumb} ${styles.generic}`}>{u.type || "file"}</div>
-        )}
+        <a href={u.url} download={u.name} title={`Download ${u.name}`}>
+          {isImage ? (
+            <img className={styles.thumb} src={u.url} alt={u.name} />)
+            : (
+            <div className={`${styles.thumb} ${styles.generic}`}>{u.type || "file"}</div>
+          )}
+        </a>
         {typeof progress === "number" && (
           <div className={styles.progressBar}>
             <div className={styles.progress} style={{ width: `${progress}%` }} />
@@ -31,6 +33,7 @@ export default function FilePreview({
       </div>
       <div className={styles.metaRow}>
         <span className={styles.name} title={u.name}>{u.name}</span>
+        <a href={u.url} download={u.name} title={`Download ${u.name}`}>Download</a>
         {removable && (
           <button type="button" className={styles.removeBtn} onClick={onRemove}>✕</button>
         )}
